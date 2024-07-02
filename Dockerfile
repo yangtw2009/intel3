@@ -1,19 +1,38 @@
-FROM debian
-RUN dpkg --add-architecture i386
-RUN apt update
-RUN DEBIAN_FRONTEND=noninteractive apt install wine qemu-kvm *zenhei* xz-utils dbus-x11 curl firefox-esr gnome-system-monitor mate-system-monitor  git xfce4 xfce4-terminal tightvncserver wget   -y
-RUN wget https://github.com/novnc/noVNC/archive/refs/tags/v1.2.0.tar.gz
-RUN tar -xvf v1.2.0.tar.gz
-RUN mkdir  $HOME/.vnc
-RUN echo 'Sophia' | vncpasswd -f > $HOME/.vnc/passwd
-RUN echo '/bin/env  MOZ_FAKE_NO_SANDBOX=1  dbus-launch xfce4-session'  > $HOME/.vnc/xstartup
-RUN chmod 600 $HOME/.vnc/passwd
-RUN chmod 755 $HOME/.vnc/xstartup
-RUN echo 'whoami ' >>/Sophia.sh
-RUN echo 'cd ' >>/Sophia.sh
-RUN echo "su -l -c 'vncserver :2000 -geometry 1360x768' "  >>/Sophia.sh
-RUN echo 'cd /noVNC-1.2.0' >>/Sophia.sh
-RUN echo './utils/launch.sh  --vnc localhost:7900 --listen 8900 ' >>/Sophia.sh
-RUN chmod 755 /Sophia.sh
-EXPOSE 8900
-CMD   Sophia.sh
+name: Deploy to Remote Server via frp
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+
+      - name: Install SSH Client
+        run: sudo apt-get install -y openssh-client
+
+      - name: Install frp client
+        run: |
+          wget https://github.com/fatedier/frp/releases/download/v0.38.0/frp_0.38.0_linux_amd64.tar.gz
+          tar -xzf frp_0.38.0_linux_amd64.tar.gz
+          cd frp_0.38.0_linux_amd64
+          echo -e "[common]\nserver_addr = ${{ secrets.SERVER_IP }}\nserver_port = 7000\nprivilege_token = ${{ secrets.FRP_TOKEN }}\n\n[ssh]\ntype = tcp\nlocal_ip = 127.0.0.1\nlocal_port = 22\nremote_port = 7090" > frpc.ini
+          nohup ./frpc -c frpc.ini &
+
+      - name: Copy files to server
+        env:
+          SSHPASS: ${{ secrets.SERVER_PASSWORD }}
+        run: |
+          sudo apt-get install -y sshpass
+          sshpass -e scp -o StrictHostKeyChecking=no -P 7090 -r . ${{ secrets.SERVER_USERNAME }}@${{ secrets.SERVER_IP }}:/home/pi/project
+
+      - name: Deploy application
+        env:
+          SSHPASS: ${{ secrets.SERVER_PASSWORD }}
+        run: |
+          sshpass -e ssh -o StrictHostKeyChecking=no -p 7090 ${{ secrets.SERVER_USERNAME }}@${{ secrets.SERVER_IP }} 'bash -s' < ./deploy-script.sh
